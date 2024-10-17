@@ -369,6 +369,184 @@ static Janet cfun_zmq_getsockopt(int32_t argc, Janet *argv) {
   }
 }
 
+static Janet cfun_zmq_setsockopt(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 3);
+  Socket *sock = (Socket *)janet_getabstract(argv, 0, &zmq_socket_type);
+  int32_t option = janet_getinteger(argv, 1);
+  size_t option_len;
+  int rc;
+  switch (option) {
+  default:
+    janet_panicf("Unkown getsockopt option %d", option);
+    break;
+  /* uint64_t */
+  case ZMQ_VMCI_BUFFER_SIZE:
+  case ZMQ_VMCI_BUFFER_MIN_SIZE:
+  case ZMQ_VMCI_BUFFER_MAX_SIZE:
+  case ZMQ_AFFINITY: {
+    uint64_t option_val = janet_unwrap_u64(argv[2]);
+    option_len = sizeof(option);
+    rc = zmq_setsockopt(sock->socket, option, &option_val, option_len);
+    if (rc == -1) {
+      janet_panicf("Couldn't set zmq socket option %d", option);
+    }
+  } break;
+  /* int */
+  case ZMQ_VMCI_CONNECT_TIMEOUT:
+  case ZMQ_XPUB_NODROP:
+  case ZMQ_XPUB_MANUAL:
+  case ZMQ_XPUB_VERBOSER:
+  case ZMQ_XPUB_VERBOSE:
+  case ZMQ_TOS:
+  case ZMQ_TCP_MAXRT:
+  case ZMQ_TCP_KEEPALIVE:
+  case ZMQ_TCP_KEEPALIVE_CNT:
+  case ZMQ_TCP_KEEPALIVE_IDLE:
+  case ZMQ_TCP_KEEPALIVE_INTVL:
+  case ZMQ_STREAM_NOTIFY:
+  case ZMQ_ROUTER_RAW:
+  case ZMQ_ROUTER_MANDATORY:
+  case ZMQ_ROUTER_HANDOVER:
+  case ZMQ_REQ_RELAXED:
+  case ZMQ_REQ_CORRELATE:
+  case ZMQ_RECONNECT_IVL_MAX:
+  case ZMQ_RECONNECT_IVL:
+  case ZMQ_RECOVERY_IVL:
+  case ZMQ_SNDHWM:
+  case ZMQ_RCVHWM:
+  case ZMQ_RCVTIMEO:
+  case ZMQ_SNDTIMEO:
+  case ZMQ_SNDBUF:
+  case ZMQ_RCVBUF:
+  case ZMQ_RATE:
+  case ZMQ_PROBE_ROUTER:
+  case ZMQ_USE_FD:
+  case ZMQ_PLAIN_SERVER:
+  case ZMQ_MULTICAST_MAXTPDU:
+  case ZMQ_MULTICAST_HOPS:
+  case ZMQ_LINGER:
+  case ZMQ_IPV6:
+  case ZMQ_INVERT_MATCHING:
+  case ZMQ_IMMEDIATE:
+  case ZMQ_HEARTBEAT_IVL:
+  case ZMQ_HEARTBEAT_TTL:
+  case ZMQ_HEARTBEAT_TIMEOUT:
+  case ZMQ_HANDSHAKE_IVL:
+  case ZMQ_GSSAPI_PRINCIPAL_NAMETYPE:
+  case ZMQ_GSSAPI_SERVICE_PRINCIPAL_NAMETYPE:
+  case ZMQ_GSSAPI_SERVER:
+  case ZMQ_GSSAPI_PLAINTEXT:
+  case ZMQ_CURVE_SERVER:
+  case ZMQ_CONNECT_TIMEOUT:
+  case ZMQ_CONFLATE:
+  case ZMQ_BACKLOG: {
+    int32_t option_val = janet_getinteger(argv, 2);
+    option_len = sizeof(option_val);
+    rc = zmq_setsockopt(sock->socket, option, &option_val, option_len);
+    if (rc == -1) {
+      janet_panicf("Couldn't set zmq socket option %d", option);
+    }
+  } break;
+    /* int64_t */
+  case ZMQ_MAXMSGSIZE: {
+    int64_t option_val = janet_unwrap_s64(argv[2]);
+    option_len = sizeof(option_val);
+    rc = zmq_setsockopt(sock->socket, option, &option_val, option_len);
+    if (rc == -1) {
+      janet_panicf("Couldn't set zmq socket option %d", option);
+    }
+  } break;
+    /* Curve */
+  case ZMQ_CURVE_SERVERKEY:
+  case ZMQ_CURVE_SECRETKEY:
+  case ZMQ_CURVE_PUBLICKEY: {
+    JanetByteView option_val = janet_getbytes(argv, 2);
+    option_len = option_val.len;
+    if (option_len == 32) {
+      /* Binary data */
+      rc = zmq_setsockopt(sock->socket, option, &option_val, option_len);
+      if (rc == -1) {
+        janet_panicf("Couldn't set zmq socket option %d", option);
+      }
+    } else if (option_len == 40) {
+      /* Z85 text encoded data */
+      char o_v[41];
+      memcpy(o_v, option_val.bytes, 40);
+      o_v[40] = '\0';
+      rc = zmq_setsockopt(sock->socket, option, o_v, 41);
+      if (rc == -1) {
+        janet_panicf("Couldn't set zmq socket option %d", option);
+      }
+    } else {
+      janet_panic("Curve key length wrong in setsockopt");
+    }
+  } break;
+  /* Binary */
+  case ZMQ_XPUB_WELCOME_MSG:
+  case ZMQ_UNSUBSCRIBE:
+  case ZMQ_SUBSCRIBE:
+  case ZMQ_ROUTING_ID:
+  case ZMQ_CONNECT_ROUTING_ID: {
+    JanetByteView option_val = janet_getbytes(argv, 2);
+    option_len = option_val.len;
+    rc = zmq_setsockopt(sock->socket, option, option_val.bytes, option_len);
+    if (rc == -1) {
+      janet_panicf("Couldn't set zmq socket option %d", option);
+    }
+  } break;
+  /* String */
+  case ZMQ_ZAP_DOMAIN:
+  case ZMQ_SOCKS_PROXY:
+  case ZMQ_PLAIN_USERNAME:
+  case ZMQ_PLAIN_PASSWORD:
+  case ZMQ_GSSAPI_SERVICE_PRINCIPAL:
+  case ZMQ_GSSAPI_PRINCIPAL:
+  case ZMQ_BINDTODEVICE: {
+    const char *option_val = janet_getcstring(argv, 2);
+    option_len = strlen(option_val);
+    rc = zmq_setsockopt(sock->socket, option, option_val, option_len);
+    if (rc == -1) {
+      janet_panicf("Couldn't set zmq socket option %d", option);
+    }
+  } break;
+  }
+  return janet_wrap_nil();
+}
+
+static Janet cfun_ctx_set(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 3);
+  Ctx *ctx = (Ctx *)janet_getabstract(argv, 0, &zmq_ctx_type);
+  int32_t option = janet_getinteger(argv, 1);
+  int32_t option_value = janet_getinteger(argv, 2);
+  int rc = zmq_ctx_set(ctx->ctx, option, option_value);
+  if(rc == -1) {
+    janet_panicf("Couldn't set option %d on zmq context to %d", option, option_value);
+  }
+  return janet_wrap_nil();
+}
+
+static Janet cfun_ctx_get(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 2);
+  Ctx *ctx = (Ctx *)janet_getabstract(argv, 0, &zmq_ctx_type);
+  int32_t option = janet_getinteger(argv, 1);
+  int rc = zmq_ctx_get(ctx->ctx, option);
+  if(rc == -1) {
+    janet_panicf("Couldn't get option %d for zmq context", option);
+  }
+  return janet_wrap_integer(rc);
+}
+
+static Janet cfun_zmq_disconnect(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 2);
+  Socket *sock = (Socket *)janet_getabstract(argv, 0, &zmq_socket_type);
+  const char *endpoint = janet_getcstring(argv, 1);
+  int rc = zmq_disconnect(sock->socket, endpoint);
+  if (rc == -1) {
+    janet_panicf("Couldn't disconnect endpoint %s from socket", endpoint);
+  }
+  return janet_wrap_nil();
+}
+
 static const JanetReg cfuns[] = {
     {"ctx_new", cfun_ctx_new, "Create a zmq context"},
     {"ctx_term", cfun_ctx_term, "Terminate a zmq context"},
@@ -379,6 +557,10 @@ static const JanetReg cfuns[] = {
     {"send", cfun_zmq_send, "Queue a message part in a zmq socket"},
     {"recv", cfun_zmq_recv, "Recv a message from a zmq socket"},
     {"getsockopt", cfun_zmq_getsockopt, "Get socket options from a zmq socket"},
+    {"setsockopt", cfun_zmq_setsockopt, "Set socket option for a zmq socket"},
+    {"ctx_set", cfun_ctx_set, "Set values on zmq context"},
+    {"ctx_get", cfun_ctx_get, "Get values from zmq context"},
+    {"disconnect", cfun_zmq_disconnect, "Disconnect a socket from an endpoint"},
     {NULL, NULL, NULL}};
 
 JANET_MODULE_ENTRY(JanetTable *env) { janet_cfuns(env, "zmq", cfuns); }
