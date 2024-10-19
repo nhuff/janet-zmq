@@ -2,6 +2,7 @@
 #include <janet.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 #include <zmq.h>
 
 #define FLAG_CLOSED 1
@@ -76,7 +77,7 @@ static Janet cfun_zmq_socket(int32_t argc, Janet *argv) {
   if (rc == -1) {
     janet_panic("Unable to get poll fd fro socket");
   }
-  ret->poll_stream = janet_stream((JanetHandle)fd, JANET_STREAM_READABLE, NULL);
+  ret->poll_stream = janet_stream((JanetHandle)dup(fd), JANET_STREAM_READABLE, NULL);
   return janet_wrap_abstract(ret);
 }
 
