@@ -1,0 +1,15 @@
+(import zmq)
+(def ctx (zmq/ctx_new))
+(def s (zmq/socket ctx zmq/ZMQ_REP))
+(def s2 (zmq/socket ctx zmq/ZMQ_REQ))
+
+(zmq/bind s "tcp://localhost:5555")
+(zmq/connect s2 "tcp://localhost:5555")
+
+(zmq/send s2 ["hello" "foo"])
+(pp (zmq/recv s))
+(zmq/send s "world")
+(pp (zmq/recv s2))
+(zmq/close s)
+(zmq/close s2)
+(zmq/ctx_term ctx)
