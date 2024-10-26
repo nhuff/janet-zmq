@@ -75,7 +75,7 @@ static Janet cfun_zmq_socket(int32_t argc, Janet *argv) {
   size_t fd_size = sizeof(fd);
   int rc = zmq_getsockopt(sock, ZMQ_FD, &fd, &fd_size);
   if (rc == -1) {
-    janet_panic("Unable to get poll fd fro socket");
+    janet_panic("Unable to get poll fd for socket");
   }
   ret->poll_stream = janet_stream((JanetHandle)dup(fd), JANET_STREAM_READABLE, NULL);
   return janet_wrap_abstract(ret);

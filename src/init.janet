@@ -4,6 +4,7 @@
 (def ZMQ_PAIR 0)
 (def ZMQ_PUB 1)
 (def ZMQ_REQ 3)
+(def ZMQ_SUB 2)
 (def ZMQ_REP 4)
 (def ZMQ_DEALER 5)
 (def ZMQ_ROUTER 6)
