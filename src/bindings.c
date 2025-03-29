@@ -104,153 +104,103 @@ static Janet cfun_zmq_bind(int32_t argc, Janet *argv) {
   return janet_wrap_integer(ret);
 }
 
-typedef struct {
-  Socket *sock;
-  JanetArray *msgs;
-} SendState;
-
-static void send_callback(JanetFiber *fiber, JanetAsyncEvent event) {
-  SendState *state = (SendState *)fiber->ev_state;
-  Socket *sock = state->sock;
-  int rc;
-  switch (event) {
-  default:
-    return;
-  case JANET_ASYNC_EVENT_INIT:
-  case JANET_ASYNC_EVENT_READ: {
-    int events;
-    size_t events_size = sizeof(events);
-    rc = zmq_getsockopt(sock->socket, ZMQ_EVENTS, &events, &events_size);
-    if (!(events & ZMQ_POLLOUT)) {
-      return;
-    }
-    int more;
-    Janet part;
-    int count = state->msgs->count;
-    for (int i = 0; i < count; i++) {
-      more = (i < (count - 1)) ? ZMQ_SNDMORE : 0;
-      part = state->msgs->data[i];
-      if (!janet_checktypes(part, JANET_TFLAG_BYTES)) {
-        janet_panic("Msg parts must be String or Buffer types");
-      }
-      JanetByteView bytes;
-      janet_bytes_view(part, &bytes.bytes, &bytes.len);
-      rc = zmq_send(sock->socket, (void *)bytes.bytes, bytes.len, more);
-      if (rc == -1) {
-        janet_panic("Error in zmq send");
-      }
-    }
-    janet_schedule(fiber, janet_wrap_nil());
-    janet_async_end(fiber);
-  } break;
-  }
-}
-
 static Janet cfun_zmq_send(int32_t argc, Janet *argv) {
   janet_arity(argc, 2, 3);
-  int32_t flags = (argc == 3) ? janet_getinteger(argv, 2) : 0;
+  int32_t flags = janet_optinteger(argv, argc , 2, 0);
   Socket *sock = (Socket *)janet_getabstract(argv, 0, &zmq_socket_type);
   int rc;
-  SendState *state = janet_malloc(sizeof(SendState));
-  state->sock = sock;
+  JanetArray *msgs;
   switch (janet_type(argv[1])) {
   case JANET_STRING:
   case JANET_BUFFER: {
     JanetByteView bytes = janet_getbytes(argv, 1);
-    state->msgs = janet_array(1);
-    janet_array_push(state->msgs,
-                     janet_wrap_string(janet_string(bytes.bytes, bytes.len)));
+    msgs = janet_array(1);
+    janet_array_push(msgs, janet_wrap_string(janet_string(bytes.bytes, bytes.len)));
   } break;
   case JANET_ARRAY:
   case JANET_TUPLE: {
     JanetView view = janet_getindexed(argv, 1);
-    state->msgs = janet_array(view.len);
+    msgs = janet_array(view.len);
     for (int i = 0; i < view.len; i++) {
       if (!janet_checktypes(view.items[i],
                             (1 << JANET_STRING) | (1 << JANET_BUFFER))) {
         janet_panic("Msg parts must be String or Buffer types");
       }
       JanetByteView bytes = janet_getbytes(view.items, i);
-      janet_array_push(state->msgs,
-                       janet_wrap_string(janet_string(bytes.bytes, bytes.len)));
+      janet_array_push(msgs, janet_wrap_string(janet_string(bytes.bytes, bytes.len)));
     }
   } break;
   default:
     janet_panic(
         "argument to zmq/send must be one of string,buffer,array,or tuple");
   }
-  janet_async_start(sock->poll_stream, JANET_ASYNC_LISTEN_READ, send_callback,
-                    state);
+  int more;
+  Janet part;
+  int len = 0;
+  for (int i = 0; i < msgs->count; i++) {
+    more = (i < (msgs->count - 1)) ? ZMQ_SNDMORE : 0;
+    part = msgs->data[i];
+    JanetByteView bytes;
+    janet_bytes_view(part, &bytes.bytes, &bytes.len);
+    rc = zmq_send(sock->socket, (void *)bytes.bytes, bytes.len, more | flags);
+    if(rc == -1) {
+      if((flags | ZMQ_DONTWAIT) && (errno == EAGAIN)) {
+        return janet_wrap_nil();
+      } else {
+        janet_panic("Error in zmq_send");
+      }
+    }
+    len += rc;
+  }
+  return janet_wrap_integer(len);
 }
 
-static JanetString _zmq_recv(void *sock) {
+static Janet _zmq_recv(void *sock, int32_t flags) {
   zmq_msg_t msg;
   int rc = zmq_msg_init(&msg);
   if (rc != 0) {
     janet_panic("Couldn't init msg in _zmq_recv");
   }
-  rc = zmq_msg_recv(&msg, sock, 0);
+  rc = zmq_msg_recv(&msg, sock, flags);
   if (rc == -1) {
-    janet_panic("Error in zmq_msg_recv");
+    if ((flags & ZMQ_DONTWAIT) && (errno == EAGAIN)) {
+      return janet_wrap_nil();
+    } else {
+      janet_panic("Error in zmq_msg_recv");
+    }
   }
-  JanetString ret =
-      janet_string((const uint8_t *)zmq_msg_data(&msg), zmq_msg_size(&msg));
+  Janet ret =
+    janet_wrap_string(janet_string((const uint8_t *)zmq_msg_data(&msg), zmq_msg_size(&msg)));
   zmq_msg_close(&msg);
   return ret;
 }
 
-typedef struct {
-  Socket *sock;
-} RecvState;
-
-static void recv_callback(JanetFiber *fiber, JanetAsyncEvent event) {
-  RecvState *state = fiber->ev_state;
-  Socket *sock = state->sock;
-  switch (event) {
-  default:
-    break;
-  case JANET_ASYNC_EVENT_INIT:
-  case JANET_ASYNC_EVENT_READ: {
-    int events;
-    size_t events_size = sizeof(events);
-    int rc = zmq_getsockopt(sock->socket, ZMQ_EVENTS, &events, &events_size);
-    if (!(events & ZMQ_POLLIN)) {
-      return;
-    }
-    int more = 0;
-    size_t more_s = sizeof(more);
-    JanetArray *ret = janet_array(16);
-    JanetString msg = _zmq_recv(sock->socket);
-    janet_array_push(ret, janet_wrap_string(msg));
-    rc = zmq_getsockopt(sock->socket, ZMQ_RCVMORE, &more, &more_s);
-    if (rc == -1) {
-      janet_panic("Couldn't get RCVMORE socket option in recv callback");
-    }
-    while (more) {
-      msg = _zmq_recv(sock->socket);
-      if (ret->count == ret->capacity) {
-        janet_array_ensure(ret, (2 * ret->count), 1);
-      }
-      janet_array_push(ret, janet_wrap_string(msg));
-      int rc = zmq_getsockopt(sock->socket, ZMQ_RCVMORE, &more, &more_s);
-      if (rc == -1) {
-        janet_panic("Couldn't get RCVMORE socket option in recv callback");
-      }
-    }
-    janet_schedule(fiber, janet_wrap_array(ret));
-    janet_async_end(fiber);
-  } break;
-  }
-}
-
 static Janet cfun_zmq_recv(int32_t argc, Janet *argv) {
   janet_arity(argc, 1, 2);
-  int32_t flags = (argc == 2) ? janet_getinteger(argv, 1) : 0;
+  int32_t flags = janet_optinteger(argv, argc, 1, 0);
   Socket *sock = (Socket *)janet_getabstract(argv, 0, &zmq_socket_type);
-  RecvState *state = janet_malloc(sizeof(RecvState));
-  state->sock = sock;
-  janet_async_start(sock->poll_stream, JANET_ASYNC_LISTEN_READ, recv_callback,
-                    state);
+  int more = 0;
+  size_t more_s = sizeof(more);
+  JanetArray *ret = janet_array(1);
+  Janet msg = _zmq_recv(sock->socket, flags);
+  if(janet_checktype(msg, JANET_NIL)) {
+    return janet_wrap_nil();
+  }
+  janet_array_push(ret, msg);
+  int rc = zmq_getsockopt(sock->socket, ZMQ_RCVMORE, &more, &more_s);
+  if (rc == -1) {
+    janet_panic("Couldn't get RCVMORE socket option in recv");
+  }
+  while (more) {
+    janet_array_ensure(ret, ret->count + 1, 2);
+    msg = _zmq_recv(sock->socket, flags);
+    janet_array_push(ret, msg);
+    rc = zmq_getsockopt(sock->socket, ZMQ_RCVMORE, &more, &more_s);
+    if (rc == -1) {
+      janet_panic("Couldn't get RCVMORE socket option in recv");
+    }
+  }
+  return janet_wrap_array(ret);
 }
 
 static Janet cfun_zmq_getsockopt(int32_t argc, Janet *argv) {
@@ -548,6 +498,45 @@ static Janet cfun_zmq_disconnect(int32_t argc, Janet *argv) {
   return janet_wrap_nil();
 }
 
+typedef struct {
+  Socket *sock;
+} PollState;
+
+static void zmq_poll_cb(JanetFiber *fiber, JanetAsyncEvent event) {
+  PollState *state = fiber->ev_state;
+  Socket *sock = state->sock;
+  switch (event) {
+  default:
+    return;
+  case JANET_ASYNC_EVENT_INIT:
+  case JANET_ASYNC_EVENT_READ: {
+    int events;
+    size_t events_size = sizeof(events);
+    int rc = zmq_getsockopt(sock->socket, ZMQ_EVENTS, &events, &events_size);
+    if (rc == -1) {
+      janet_panic("Couldn't get events in poll");
+    }
+    janet_schedule(fiber, janet_wrap_integer(events));
+    janet_async_end(fiber);
+  } break;
+  }
+}
+
+static Janet cfun_zmq_poll(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 1);
+  Socket *sock = (Socket *)janet_getabstract(argv, 0, &zmq_socket_type);
+  PollState *state = janet_malloc(sizeof(PollState));
+  int fd;
+  size_t fd_size = sizeof(fd);
+  int rc = zmq_getsockopt(sock->socket, ZMQ_FD, &fd, &fd_size);
+  if (rc == -1) {
+    janet_panic("Couldn't get ZMQ fd for polling");
+  }
+  state->sock = sock;
+  JanetStream *poll_stream = janet_stream(dup(fd), JANET_STREAM_READABLE, NULL);
+  janet_async_start(poll_stream, JANET_ASYNC_LISTEN_READ, zmq_poll_cb, state);
+}
+
 static const JanetReg cfuns[] = {
     {"ctx_new", cfun_ctx_new, "Create a zmq context"},
     {"ctx_term", cfun_ctx_term, "Terminate a zmq context"},
@@ -562,6 +551,10 @@ static const JanetReg cfuns[] = {
     {"ctx_set", cfun_ctx_set, "Set values on zmq context"},
     {"ctx_get", cfun_ctx_get, "Get values from zmq context"},
     {"disconnect", cfun_zmq_disconnect, "Disconnect a socket from an endpoint"},
-    {NULL, NULL, NULL}};
+    {"poll", cfun_zmq_poll, "Poll an event_fd for activity"}, {
+  NULL, NULL, NULL
+}
+}
+;
 
 JANET_MODULE_ENTRY(JanetTable *env) { janet_cfuns(env, "zmq", cfuns); }

@@ -1,4 +1,4 @@
-(import zmq/native :prefix "" :export true)
+(import zmq-native)
 
 # Socket types
 (def ZMQ_PAIR 0)
@@ -117,3 +117,106 @@
 (def ZMQ_THREAD_AFFINITY_CPU_ADD 7)
 (def ZMQ_THREAD_AFFINITY_CPU_REMOVE 8)
 (def ZMQ_THREAD_NAME_PREFIX 9)
+
+# Poll status
+(def ZMQ_POLLIN 1)
+(def ZMQ_POLLOUT 2)
+(def ZMQ_POLLERR 4)
+(def ZMQ_POLLPRI 8)
+
+
+(defn setsockopt [socket option value]
+  (zmq-native/setsockopt (get socket :socket) option value))
+
+
+(defn getsockopt [socket option]
+  (zmq-native/getsockopt (get socket :socket) option))
+
+
+(defn- update-events [socket]
+  (put socket :state (getsockopt socket ZMQ_EVENTS)))
+
+
+(defn- handle_send [socket]
+  (let [wchan (get socket :write-chan)
+        sock  (get socket :socket)
+        state (get socket :state)]
+    (loop [:while (and (not= (band ZMQ_POLLOUT state) 0) (> (ev/count wchan) 0))]
+      (let [msg (ev/take wchan)]
+          (zmq-native/send sock msg ZMQ_DONTWAIT))
+      (update-events socket))))
+
+
+(defn- handle_recv [socket]
+  (loop [:while (not= (band ZMQ_POLLIN (get socket :state)) 0)]
+    (let [msg (zmq-native/recv (get socket :socket) ZMQ_DONTWAIT)]
+      (ev/give (get socket :read-chan) msg)
+      (update-events socket))))
+
+
+(defn- handle_commands [socket]
+  (let [cchan (get socket :command-chan)
+        wchan (get socket :write-chan)
+        sock (get socket :socket)]
+    (loop [:while (> (ev/count cchan) 0)]
+      (let [[cmd payload] (ev/take cchan)]
+        (case cmd
+          :send (ev/give wchan payload)
+          :close (do
+                   (zmq-native/close sock)
+                   (error :stop)))))))
+
+
+(defn- io-func [socket]
+    (forever
+      (try
+        (do
+          (put socket :state (zmq-native/poll (get socket :socket)))
+          (handle_commands socket)
+          (handle_send socket)
+          (handle_recv socket))
+        ([err] (break)))))
+        
+    
+(defn ctx_new []
+  (zmq-native/ctx_new))
+
+
+(defn- start-io-func [socket]
+  (let [io-fiber (ev/call io-func socket)]
+    (put socket :io-fiber io-fiber)))
+
+
+(defn socket [ctx type]
+  (let [s (zmq-native/socket ctx type)
+        rchan (ev/chan 1)
+        cchan (ev/chan 1)
+        wchan (ev/chan 1)
+        sock @{:socket s :read-chan rchan :command-chan cchan :write-chan wchan :state 0}]
+    (start-io-func sock)
+    sock))
+
+
+(defn close [socket]
+  (ev/give (get socket :command-chan) [:close nil]))
+
+
+(defn ctx_term [ctx]
+  (zmq-native/ctx_term ctx))
+
+
+(defn bind [socket endpoint]
+  (zmq-native/bind (get socket :socket) endpoint))
+
+
+(defn connect [socket endpoint]
+  (zmq-native/connect (get socket :socket) endpoint))
+
+
+(defn send [socket msg]
+  (ev/give (get socket :command-chan) [:send msg]))
+
+
+(defn recv [socket]
+  (ev/take (get socket :read-chan)))
+
