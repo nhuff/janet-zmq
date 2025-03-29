@@ -1,0 +1,23 @@
+{
+    "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.13.6/.schema/devbox.schema.json",
+    "packages": [
+        "janet@latest",
+        "jpm@latest",
+        "zeromq4@latest",
+        "pkg-config@latest",
+        "llvmPackages_19.clang-tools@latest",
+        "llvmPackages_19.clangUseLLVM@latest"
+    ],
+    "shell": {
+        "init_hook": [
+            "echo 'Welcome to devbox!' > /dev/null"
+        ],
+        "scripts": {
+            "build": "jpm -l build",
+            "clean": "jpm -l clean",
+            "test": [
+                "echo \"Error: no test specified\" && exit 1"
+            ]
+        }
+    }
+}
